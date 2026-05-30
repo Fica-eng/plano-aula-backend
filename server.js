@@ -6,35 +6,42 @@ const { Pool } = require("pg");
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || "segredo_muito_secreto_mudar_isto";
+const JWT_SECRET = process.env.JWT_SECRET || "plano_aula_moz_2026_secreto";
 
-// ── Base de dados ──────────────────────────────────────────────────────────
-const db = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+// ── Base de dados PostgreSQL ───────────────────────────────────────────────
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
-// Criar tabelas se não existirem
+// Criar tabelas automaticamente
 async function iniciarDB() {
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS professores (
-      id SERIAL PRIMARY KEY,
-      nome TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      senha TEXT NOT NULL,
-      escola TEXT,
-      disciplina TEXT,
-      criado_em TIMESTAMP DEFAULT NOW()
-    );
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS professores (
+        id SERIAL PRIMARY KEY,
+        nome TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        senha TEXT NOT NULL,
+        escola TEXT DEFAULT '',
+        disciplina TEXT DEFAULT '',
+        criado_em TIMESTAMP DEFAULT NOW()
+      );
 
-    CREATE TABLE IF NOT EXISTS planos (
-      id SERIAL PRIMARY KEY,
-      professor_id INTEGER REFERENCES professores(id) ON DELETE CASCADE,
-      tema TEXT,
-      disciplina TEXT,
-      classe TEXT,
-      dados JSONB,
-      criado_em TIMESTAMP DEFAULT NOW()
-    );
-  `);
-  console.log("Base de dados pronta.");
+      CREATE TABLE IF NOT EXISTS planos (
+        id SERIAL PRIMARY KEY,
+        professor_id INTEGER REFERENCES professores(id) ON DELETE CASCADE,
+        tema TEXT,
+        disciplina TEXT,
+        classe TEXT,
+        dados JSONB,
+        criado_em TIMESTAMP DEFAULT NOW()
+      );
+    `);
+    console.log("✅ Base de dados pronta.");
+  } catch (err) {
+    console.error("❌ Erro ao iniciar DB:", err.message);
+  }
 }
 iniciarDB();
 
@@ -49,7 +56,7 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "10mb" }));
 
-// Middleware de autenticação JWT
+// Middleware JWT
 function autenticar(req, res, next) {
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ erro: "Token em falta." });
@@ -57,13 +64,11 @@ function autenticar(req, res, next) {
     req.professor = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
-    res.status(401).json({ erro: "Token inválido ou expirado." });
+    res.status(401).json({ erro: "Token inválido ou expirado. Faça login novamente." });
   }
 }
 
-// ── Rotas de autenticação ──────────────────────────────────────────────────
-
-// REGISTO
+// ── REGISTO ────────────────────────────────────────────────────────────────
 app.post("/registar", async (req, res) => {
   const { nome, email, senha, escola, disciplina } = req.body;
   if (!nome || !email || !senha)
@@ -75,18 +80,23 @@ app.post("/registar", async (req, res) => {
 
     const hash = await bcrypt.hash(senha, 10);
     const result = await db.query(
-      "INSERT INTO professores (nome, email, senha, escola, disciplina) VALUES ($1,$2,$3,$4,$5) RETURNING id, nome, email, escola, disciplina",
+      `INSERT INTO professores (nome, email, senha, escola, disciplina)
+       VALUES ($1,$2,$3,$4,$5)
+       RETURNING id, nome, email, escola, disciplina`,
       [nome, email, hash, escola||"", disciplina||""]
     );
     const professor = result.rows[0];
-    const token = jwt.sign({ id: professor.id, nome: professor.nome, email: professor.email }, JWT_SECRET, { expiresIn: "7d" });
+    const token = jwt.sign(
+      { id: professor.id, nome: professor.nome, email: professor.email },
+      JWT_SECRET, { expiresIn: "7d" }
+    );
     res.json({ token, professor });
   } catch (err) {
     res.status(500).json({ erro: "Erro ao registar: " + err.message });
   }
 });
 
-// LOGIN
+// ── LOGIN ──────────────────────────────────────────────────────────────────
 app.post("/login", async (req, res) => {
   const { email, senha } = req.body;
   if (!email || !senha)
@@ -97,32 +107,42 @@ app.post("/login", async (req, res) => {
       return res.status(401).json({ erro: "Email ou senha incorrectos." });
 
     const professor = result.rows[0];
-    const senhaCorrecta = await bcrypt.compare(senha, professor.senha);
-    if (!senhaCorrecta)
+    const ok = await bcrypt.compare(senha, professor.senha);
+    if (!ok)
       return res.status(401).json({ erro: "Email ou senha incorrectos." });
 
-    const token = jwt.sign({ id: professor.id, nome: professor.nome, email: professor.email }, JWT_SECRET, { expiresIn: "7d" });
-    res.json({ token, professor: { id: professor.id, nome: professor.nome, email: professor.email, escola: professor.escola, disciplina: professor.disciplina } });
+    const token = jwt.sign(
+      { id: professor.id, nome: professor.nome, email: professor.email },
+      JWT_SECRET, { expiresIn: "7d" }
+    );
+    res.json({
+      token,
+      professor: { id: professor.id, nome: professor.nome, email: professor.email, escola: professor.escola, disciplina: professor.disciplina }
+    });
   } catch (err) {
     res.status(500).json({ erro: "Erro ao fazer login: " + err.message });
   }
 });
 
-// PERFIL
+// ── PERFIL ─────────────────────────────────────────────────────────────────
 app.get("/perfil", autenticar, async (req, res) => {
   try {
-    const result = await db.query("SELECT id, nome, email, escola, disciplina, criado_em FROM professores WHERE id = $1", [req.professor.id]);
+    const result = await db.query(
+      "SELECT id, nome, email, escola, disciplina, criado_em FROM professores WHERE id = $1",
+      [req.professor.id]
+    );
+    if (result.rows.length === 0)
+      return res.status(404).json({ erro: "Professor não encontrado." });
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }
 });
 
-// ── Rota de geração (protegida) ────────────────────────────────────────────
+// ── GERAR PLANO (protegido) ────────────────────────────────────────────────
 app.post("/gerar", autenticar, async (req, res) => {
   try {
     const body = { ...req.body, max_tokens: Math.min(req.body.max_tokens || 8000, 8000) };
-
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -132,7 +152,6 @@ app.post("/gerar", autenticar, async (req, res) => {
       },
       body: JSON.stringify(body),
     });
-
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err) {
@@ -140,7 +159,7 @@ app.post("/gerar", autenticar, async (req, res) => {
   }
 });
 
-// ── Guardar plano ──────────────────────────────────────────────────────────
+// ── GUARDAR PLANO ──────────────────────────────────────────────────────────
 app.post("/guardar-plano", autenticar, async (req, res) => {
   const { tema, disciplina, classe, dados } = req.body;
   try {
@@ -154,11 +173,13 @@ app.post("/guardar-plano", autenticar, async (req, res) => {
   }
 });
 
-// ── Listar planos do professor ─────────────────────────────────────────────
+// ── LISTAR PLANOS ──────────────────────────────────────────────────────────
 app.get("/meus-planos", autenticar, async (req, res) => {
   try {
     const result = await db.query(
-      "SELECT id, tema, disciplina, classe, criado_em FROM planos WHERE professor_id = $1 ORDER BY criado_em DESC LIMIT 20",
+      `SELECT id, tema, disciplina, classe, criado_em
+       FROM planos WHERE professor_id = $1
+       ORDER BY criado_em DESC LIMIT 20`,
       [req.professor.id]
     );
     res.json(result.rows);
@@ -167,9 +188,9 @@ app.get("/meus-planos", autenticar, async (req, res) => {
   }
 });
 
-// ── Verificação ────────────────────────────────────────────────────────────
+// ── VERIFICAÇÃO ────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({ status: "ok", mensagem: "Servidor do Gerador de Plano de Aula activo." });
 });
 
-app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor na porta ${PORT}`));
