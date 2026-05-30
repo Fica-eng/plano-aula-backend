@@ -18,8 +18,8 @@ app.use(express.json({ limit: "10mb" }));
 
 app.post("/gerar", async (req, res) => {
   try {
-    // Garantir que max_tokens nunca passa de 8000
     const body = { ...req.body, max_tokens: Math.min(req.body.max_tokens || 8000, 8000) };
+    // Modelo: claude-opus-4-8
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
