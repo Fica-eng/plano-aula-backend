@@ -6,10 +6,28 @@ const nodemailer = require("nodemailer");
 const crypto   = require("crypto");
 const { Pool } = require("pg");
 
-const app  = express();
-const PORT = process.env.PORT || 3000;
+const app    = express();
+const PORT   = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "plano_aula_moz_2026_secreto";
 const APP_URL    = process.env.APP_URL || "https://fica-eng.github.io/gerador-de-planos-de-aulas";
+
+const transporter = nodemailer.createTransport({
+  host: "smtp-relay.gmail.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false,
+    ciphers: "SSLv3"
+  },
+  requireTLS: true,
+  connectionTimeout: 30000,
+  greetingTimeout: 30000,
+  socketTimeout: 30000,
+});
 
 // ── Base de dados ──────────────────────────────────────────────────────────
 const db = new Pool({
@@ -55,24 +73,8 @@ async function iniciarDB() {
 iniciarDB();
 
 // ── Email ──────────────────────────────────────────────────────────────────
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false
-  },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 10000,
-});
-
 async function enviarEmailVerificacao(nome, email, token) {
-  const link = `${process.env.APP_URL}?verificar=${token}`;
+  const link = `${APP_URL}?verificar=${token}`;
   try {
     await transporter.sendMail({
       from: `"Gerador de Plano de Aula" <${process.env.EMAIL_USER}>`,
@@ -107,7 +109,7 @@ async function enviarEmailVerificacao(nome, email, token) {
     });
     console.log(`✅ Email enviado para ${email}`);
   } catch (err) {
-    console.error(`❌ Erro ao enviar email para ${email}:`, err.message);
+    console.error(`❌ Erro email para ${email}:`, err.message);
     throw err;
   }
 }
