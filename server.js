@@ -31,7 +31,6 @@ async function iniciarDB() {
         token_verificacao TEXT,
         criado_em TIMESTAMP DEFAULT NOW()
       );
-
       CREATE TABLE IF NOT EXISTS planos (
         id SERIAL PRIMARY KEY,
         professor_id INTEGER REFERENCES professores(id) ON DELETE CASCADE,
@@ -42,6 +41,12 @@ async function iniciarDB() {
         criado_em TIMESTAMP DEFAULT NOW()
       );
     `);
+
+    // Migração — adicionar colunas se não existirem
+    await db.query(`ALTER TABLE professores ADD COLUMN IF NOT EXISTS verificado BOOLEAN DEFAULT FALSE`);
+    await db.query(`ALTER TABLE professores ADD COLUMN IF NOT EXISTS token_verificacao TEXT`);
+    await db.query(`UPDATE professores SET verificado = TRUE WHERE verificado IS NULL OR verificado = FALSE`);
+
     console.log("✅ Base de dados pronta.");
   } catch (err) {
     console.error("❌ Erro DB:", err.message);
