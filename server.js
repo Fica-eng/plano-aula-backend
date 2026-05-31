@@ -56,46 +56,57 @@ iniciarDB();
 
 // ── Email ──────────────────────────────────────────────────────────────────
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
+  tls: {
+    rejectUnauthorized: false
+  }
 });
 
 async function enviarEmailVerificacao(nome, email, token) {
   const link = `${process.env.APP_URL}?verificar=${token}`;
-  await transporter.sendMail({
-    from: `"Gerador de Plano de Aula" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: "✅ Confirme o seu email — Gerador de Plano de Aula",
-    html: `
-      <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:12px">
-        <div style="text-align:center;margin-bottom:24px">
-          <h1 style="color:#1a56db;font-size:22px;margin:0">📋 Gerador de Plano de Aula</h1>
-          <p style="color:#666;font-size:13px;margin-top:6px">Plataforma para professores moçambicanos</p>
-        </div>
-        <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid #e5e7eb">
-          <p style="font-size:15px;color:#333">Olá, <b>${nome}</b>!</p>
-          <p style="font-size:14px;color:#555;margin-top:8px">
-            Obrigado por se registar. Clique no botão abaixo para confirmar o seu email e activar a sua conta.
-          </p>
-          <div style="text-align:center;margin:28px 0">
-            <a href="${link}" style="background:#1a56db;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold">
-              ✅ Confirmar Email
-            </a>
+  try {
+    await transporter.sendMail({
+      from: `"Gerador de Plano de Aula" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "✅ Confirme o seu email — Gerador de Plano de Aula",
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:12px">
+          <div style="text-align:center;margin-bottom:24px">
+            <h1 style="color:#1a56db;font-size:22px;margin:0">📋 Gerador de Plano de Aula</h1>
+            <p style="color:#666;font-size:13px;margin-top:6px">Plataforma para professores moçambicanos</p>
           </div>
-          <p style="font-size:12px;color:#888;text-align:center">
-            Se não se registou, ignore este email.<br/>
-            O link expira em <b>24 horas</b>.
+          <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid #e5e7eb">
+            <p style="font-size:15px;color:#333">Olá, <b>${nome}</b>!</p>
+            <p style="font-size:14px;color:#555;margin-top:8px">
+              Obrigado por se registar. Clique no botão abaixo para confirmar o seu email e activar a sua conta.
+            </p>
+            <div style="text-align:center;margin:28px 0">
+              <a href="${link}" style="background:#1a56db;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold">
+                ✅ Confirmar Email
+              </a>
+            </div>
+            <p style="font-size:12px;color:#888;text-align:center">
+              Se não se registou, ignore este email.<br/>
+              O link expira em <b>24 horas</b>.
+            </p>
+          </div>
+          <p style="font-size:11px;color:#aaa;text-align:center;margin-top:16px">
+            © 2026 Gerador de Plano de Aula — Moçambique
           </p>
         </div>
-        <p style="font-size:11px;color:#aaa;text-align:center;margin-top:16px">
-          © 2026 Gerador de Plano de Aula — Moçambique
-        </p>
-      </div>
-    `,
-  });
+      `,
+    });
+    console.log(`✅ Email enviado para ${email}`);
+  } catch (err) {
+    console.error(`❌ Erro ao enviar email para ${email}:`, err.message);
+    throw err;
+  }
 }
 
 // ── Middleware ─────────────────────────────────────────────────────────────
