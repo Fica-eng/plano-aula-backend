@@ -1,20 +1,22 @@
-const express = require("express");
-const cors    = require("cors");
-const bcrypt  = require("bcryptjs");
-const jwt     = require("jsonwebtoken");
+const express  = require("express");
+const cors     = require("cors");
+const bcrypt   = require("bcryptjs");
+const jwt      = require("jsonwebtoken");
+const nodemailer = require("nodemailer");
+const crypto   = require("crypto");
 const { Pool } = require("pg");
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "plano_aula_moz_2026_secreto";
+const APP_URL    = process.env.APP_URL || "https://fica-eng.github.io/gerador-de-planos-de-aulas";
 
-// ── Base de dados PostgreSQL ───────────────────────────────────────────────
+// ── Base de dados ──────────────────────────────────────────────────────────
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// Criar tabelas automaticamente
 async function iniciarDB() {
   try {
     await db.query(`
@@ -25,6 +27,8 @@ async function iniciarDB() {
         senha TEXT NOT NULL,
         escola TEXT DEFAULT '',
         disciplina TEXT DEFAULT '',
+        verificado BOOLEAN DEFAULT FALSE,
+        token_verificacao TEXT,
         criado_em TIMESTAMP DEFAULT NOW()
       );
 
@@ -40,10 +44,54 @@ async function iniciarDB() {
     `);
     console.log("✅ Base de dados pronta.");
   } catch (err) {
-    console.error("❌ Erro ao iniciar DB:", err.message);
+    console.error("❌ Erro DB:", err.message);
   }
 }
 iniciarDB();
+
+// ── Email ──────────────────────────────────────────────────────────────────
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+async function enviarEmailVerificacao(nome, email, token) {
+  const link = `${process.env.APP_URL}?verificar=${token}`;
+  await transporter.sendMail({
+    from: `"Gerador de Plano de Aula" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: "✅ Confirme o seu email — Gerador de Plano de Aula",
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:12px">
+        <div style="text-align:center;margin-bottom:24px">
+          <h1 style="color:#1a56db;font-size:22px;margin:0">📋 Gerador de Plano de Aula</h1>
+          <p style="color:#666;font-size:13px;margin-top:6px">Plataforma para professores moçambicanos</p>
+        </div>
+        <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid #e5e7eb">
+          <p style="font-size:15px;color:#333">Olá, <b>${nome}</b>!</p>
+          <p style="font-size:14px;color:#555;margin-top:8px">
+            Obrigado por se registar. Clique no botão abaixo para confirmar o seu email e activar a sua conta.
+          </p>
+          <div style="text-align:center;margin:28px 0">
+            <a href="${link}" style="background:#1a56db;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold">
+              ✅ Confirmar Email
+            </a>
+          </div>
+          <p style="font-size:12px;color:#888;text-align:center">
+            Se não se registou, ignore este email.<br/>
+            O link expira em <b>24 horas</b>.
+          </p>
+        </div>
+        <p style="font-size:11px;color:#aaa;text-align:center;margin-top:16px">
+          © 2026 Gerador de Plano de Aula — Moçambique
+        </p>
+      </div>
+    `,
+  });
+}
 
 // ── Middleware ─────────────────────────────────────────────────────────────
 app.use(cors({
@@ -56,7 +104,6 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "10mb" }));
 
-// Middleware JWT
 function autenticar(req, res, next) {
   const token = req.headers["authorization"]?.split(" ")[1];
   if (!token) return res.status(401).json({ erro: "Token em falta." });
@@ -78,21 +125,49 @@ app.post("/registar", async (req, res) => {
     if (existe.rows.length > 0)
       return res.status(400).json({ erro: "Este email já está registado." });
 
-    const hash = await bcrypt.hash(senha, 10);
-    const result = await db.query(
-      `INSERT INTO professores (nome, email, senha, escola, disciplina)
-       VALUES ($1,$2,$3,$4,$5)
-       RETURNING id, nome, email, escola, disciplina`,
-      [nome, email, hash, escola||"", disciplina||""]
+    const hash  = await bcrypt.hash(senha, 10);
+    const token = crypto.randomBytes(32).toString("hex");
+
+    await db.query(
+      `INSERT INTO professores (nome, email, senha, escola, disciplina, verificado, token_verificacao)
+       VALUES ($1,$2,$3,$4,$5,FALSE,$6)`,
+      [nome, email, hash, escola||"", disciplina||"", token]
     );
+
+    await enviarEmailVerificacao(nome, email, token);
+
+    res.json({ mensagem: "Registo feito com sucesso! Verifique o seu email para activar a conta." });
+  } catch (err) {
+    res.status(500).json({ erro: "Erro ao registar: " + err.message });
+  }
+});
+
+// ── VERIFICAR EMAIL ────────────────────────────────────────────────────────
+app.get("/verificar/:token", async (req, res) => {
+  const { token } = req.params;
+  try {
+    const result = await db.query(
+      "SELECT id, nome, email, escola, disciplina FROM professores WHERE token_verificacao = $1",
+      [token]
+    );
+    if (result.rows.length === 0)
+      return res.status(400).json({ erro: "Link inválido ou já utilizado." });
+
     const professor = result.rows[0];
-    const token = jwt.sign(
+    await db.query(
+      "UPDATE professores SET verificado = TRUE, token_verificacao = NULL WHERE id = $1",
+      [professor.id]
+    );
+
+    const jwtToken = jwt.sign(
       { id: professor.id, nome: professor.nome, email: professor.email },
       JWT_SECRET, { expiresIn: "7d" }
     );
-    res.json({ token, professor });
+
+    // Redirecionar para o site com token
+    res.redirect(`${APP_URL}?login_token=${jwtToken}&nome=${encodeURIComponent(professor.nome)}&email=${encodeURIComponent(professor.email)}&escola=${encodeURIComponent(professor.escola||"")}&disciplina=${encodeURIComponent(professor.disciplina||"")}`);
   } catch (err) {
-    res.status(500).json({ erro: "Erro ao registar: " + err.message });
+    res.status(500).json({ erro: err.message });
   }
 });
 
@@ -107,6 +182,10 @@ app.post("/login", async (req, res) => {
       return res.status(401).json({ erro: "Email ou senha incorrectos." });
 
     const professor = result.rows[0];
+
+    if (!professor.verificado)
+      return res.status(401).json({ erro: "Por favor confirme o seu email antes de fazer login. Verifique a sua caixa de entrada.", naoVerificado: true });
+
     const ok = await bcrypt.compare(senha, professor.senha);
     if (!ok)
       return res.status(401).json({ erro: "Email ou senha incorrectos." });
@@ -120,7 +199,29 @@ app.post("/login", async (req, res) => {
       professor: { id: professor.id, nome: professor.nome, email: professor.email, escola: professor.escola, disciplina: professor.disciplina }
     });
   } catch (err) {
-    res.status(500).json({ erro: "Erro ao fazer login: " + err.message });
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// ── REENVIAR EMAIL ─────────────────────────────────────────────────────────
+app.post("/reenviar-verificacao", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const result = await db.query("SELECT * FROM professores WHERE email = $1", [email]);
+    if (result.rows.length === 0)
+      return res.status(404).json({ erro: "Email não encontrado." });
+
+    const professor = result.rows[0];
+    if (professor.verificado)
+      return res.status(400).json({ erro: "Este email já foi verificado." });
+
+    const token = crypto.randomBytes(32).toString("hex");
+    await db.query("UPDATE professores SET token_verificacao = $1 WHERE id = $2", [token, professor.id]);
+    await enviarEmailVerificacao(professor.nome, professor.email, token);
+
+    res.json({ mensagem: "Email de verificação reenviado com sucesso." });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
   }
 });
 
@@ -139,7 +240,7 @@ app.get("/perfil", autenticar, async (req, res) => {
   }
 });
 
-// ── GERAR PLANO (protegido) ────────────────────────────────────────────────
+// ── GERAR PLANO ────────────────────────────────────────────────────────────
 app.post("/gerar", autenticar, async (req, res) => {
   try {
     const body = { ...req.body, max_tokens: Math.min(req.body.max_tokens || 8000, 8000) };
@@ -177,9 +278,8 @@ app.post("/guardar-plano", autenticar, async (req, res) => {
 app.get("/meus-planos", autenticar, async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT id, tema, disciplina, classe, criado_em
-       FROM planos WHERE professor_id = $1
-       ORDER BY criado_em DESC LIMIT 20`,
+      `SELECT id, tema, disciplina, classe, criado_em FROM planos
+       WHERE professor_id = $1 ORDER BY criado_em DESC LIMIT 20`,
       [req.professor.id]
     );
     res.json(result.rows);
