@@ -57,15 +57,18 @@ iniciarDB();
 // ── Email ──────────────────────────────────────────────────────────────────
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
+  port: 587,
+  secure: false,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
   tls: {
     rejectUnauthorized: false
-  }
+  },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000,
 });
 
 async function enviarEmailVerificacao(nome, email, token) {
@@ -315,8 +318,23 @@ app.get("/meus-planos", autenticar, async (req, res) => {
   }
 });
 
-// ── VERIFICAÇÃO ────────────────────────────────────────────────────────────
-app.get("/", (req, res) => {
+// ── TESTE DE EMAIL ─────────────────────────────────────────────────────────
+app.get("/teste-email/:email", async (req, res) => {
+  try {
+    await transporter.verify();
+    console.log("✅ Ligação SMTP verificada");
+    await transporter.sendMail({
+      from: `"Teste" <${process.env.EMAIL_USER}>`,
+      to: req.params.email,
+      subject: "Teste de email — Gerador de Plano de Aula",
+      text: "Se recebeu este email, o sistema está a funcionar correctamente!",
+    });
+    res.json({ sucesso: true, mensagem: `Email enviado para ${req.params.email}` });
+  } catch (err) {
+    console.error("❌ Erro teste email:", err);
+    res.status(500).json({ erro: err.message, codigo: err.code, resposta: err.response });
+  }
+});
   res.json({ status: "ok", mensagem: "Servidor do Gerador de Plano de Aula activo." });
 });
 
