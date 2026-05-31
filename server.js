@@ -150,9 +150,14 @@ app.post("/registar", async (req, res) => {
       [nome, email, hash, escola||"", disciplina||"", token]
     );
 
-    await enviarEmailVerificacao(nome, email, token);
-
+    // Responder imediatamente — não bloquear à espera do email
     res.json({ mensagem: "Registo feito com sucesso! Verifique o seu email para activar a conta." });
+
+    // Enviar email em background
+    enviarEmailVerificacao(nome, email, token)
+      .then(() => console.log(`✅ Email enviado para ${email}`))
+      .catch(err => console.error(`❌ Erro email para ${email}:`, err.message));
+
   } catch (err) {
     res.status(500).json({ erro: "Erro ao registar: " + err.message });
   }
@@ -233,9 +238,15 @@ app.post("/reenviar-verificacao", async (req, res) => {
 
     const token = crypto.randomBytes(32).toString("hex");
     await db.query("UPDATE professores SET token_verificacao = $1 WHERE id = $2", [token, professor.id]);
-    await enviarEmailVerificacao(professor.nome, professor.email, token);
 
+    // Responder imediatamente
     res.json({ mensagem: "Email de verificação reenviado com sucesso." });
+
+    // Enviar em background
+    enviarEmailVerificacao(professor.nome, professor.email, token)
+      .then(() => console.log(`✅ Email reenviado para ${email}`))
+      .catch(err => console.error(`❌ Erro reenvio para ${email}:`, err.message));
+
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }
