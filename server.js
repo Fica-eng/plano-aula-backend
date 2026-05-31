@@ -6,28 +6,81 @@ const nodemailer = require("nodemailer");
 const crypto   = require("crypto");
 const { Pool } = require("pg");
 
-const app    = express();
-const PORT   = process.env.PORT || 3000;
+const app        = express();
+const PORT       = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "plano_aula_moz_2026_secreto";
 const APP_URL    = process.env.APP_URL || "https://fica-eng.github.io/gerador-de-planos-de-aulas";
 
-const transporter = nodemailer.createTransport({
-  host: "smtp-relay.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false,
-    ciphers: "SSLv3"
-  },
-  requireTLS: true,
-  connectionTimeout: 30000,
-  greetingTimeout: 30000,
-  socketTimeout: 30000,
-});
+// Tentar todas as configurações possíveis
+const configs = [
+  { host:"smtp.gmail.com", port:587, secure:false },
+  { host:"smtp.gmail.com", port:465, secure:true  },
+  { host:"smtp.gmail.com", port:25,  secure:false },
+  { host:"aspmx.l.google.com", port:25, secure:false },
+];
+
+function criarTransporter(config) {
+  return nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+    tls: { rejectUnauthorized: false },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
+  });
+}
+
+async function enviarEmailVerificacao(nome, email, token) {
+  const link = `${APP_URL}?verificar=${token}`;
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:12px">
+      <div style="text-align:center;margin-bottom:24px">
+        <h1 style="color:#1a56db;font-size:22px;margin:0">📋 Gerador de Plano de Aula</h1>
+        <p style="color:#666;font-size:13px;margin-top:6px">Plataforma para professores moçambicanos</p>
+      </div>
+      <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid #e5e7eb">
+        <p style="font-size:15px;color:#333">Olá, <b>${nome}</b>!</p>
+        <p style="font-size:14px;color:#555;margin-top:8px">
+          Obrigado por se registar. Clique no botão abaixo para confirmar o seu email e activar a sua conta.
+        </p>
+        <div style="text-align:center;margin:28px 0">
+          <a href="${link}" style="background:#1a56db;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold">
+            ✅ Confirmar Email
+          </a>
+        </div>
+        <p style="font-size:12px;color:#888;text-align:center">
+          O link expira em <b>24 horas</b>.
+        </p>
+      </div>
+    </div>`;
+
+  // Tentar cada configuração até uma funcionar
+  let ultimoErro = null;
+  for (const config of configs) {
+    try {
+      console.log(`🔄 Tentando ${config.host}:${config.port}...`);
+      const transporter = criarTransporter(config);
+      await transporter.verify();
+      await transporter.sendMail({
+        from: `"Gerador de Plano de Aula" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: "✅ Confirme o seu email — Gerador de Plano de Aula",
+        html,
+      });
+      console.log(`✅ Email enviado via ${config.host}:${config.port}`);
+      return; // sucesso — sair
+    } catch (err) {
+      console.error(`❌ Falhou ${config.host}:${config.port} — ${err.message}`);
+      ultimoErro = err;
+    }
+  }
+  throw ultimoErro;
+}
 
 // ── Base de dados ──────────────────────────────────────────────────────────
 const db = new Pool({
@@ -76,8 +129,8 @@ iniciarDB();
 async function enviarEmailVerificacao(nome, email, token) {
   const link = `${APP_URL}?verificar=${token}`;
   try {
-    await transporter.sendMail({
-      from: `"Gerador de Plano de Aula" <${process.env.EMAIL_USER}>`,
+    const { data, error } = await resend.emails.send({
+      from: "Gerador de Plano de Aula <onboarding@resend.dev>",
       to: email,
       subject: "✅ Confirme o seu email — Gerador de Plano de Aula",
       html: `
@@ -107,7 +160,8 @@ async function enviarEmailVerificacao(nome, email, token) {
         </div>
       `,
     });
-    console.log(`✅ Email enviado para ${email}`);
+    if (error) throw new Error(JSON.stringify(error));
+    console.log(`✅ Email enviado para ${email}:`, data?.id);
   } catch (err) {
     console.error(`❌ Erro email para ${email}:`, err.message);
     throw err;
