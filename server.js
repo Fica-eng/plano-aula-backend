@@ -180,7 +180,7 @@ app.get("/verificar/:token", async (req, res) => {
       JWT_SECRET, { expiresIn: "7d" }
     );
 
-    // Página HTML que guarda o token e redireciona
+    // Página HTML que redireciona com token no URL
     res.send(`
       <!DOCTYPE html>
       <html>
@@ -205,16 +205,9 @@ app.get("/verificar/:token", async (req, res) => {
           <p style="font-size:12px;color:#888">A entrar automaticamente...</p>
         </div>
         <script>
-          // Guardar sessão no localStorage do site
-          const u = ${JSON.stringify({
-            nome: professor.nome,
-            email: professor.email,
-            escola: professor.escola || "",
-            disciplina: professor.disciplina || ""
-          })};
-          localStorage.setItem("token", "${jwtToken}");
-          localStorage.setItem("utilizador", JSON.stringify(u));
-          setTimeout(() => { window.location.href = "${APP_URL}"; }, 2000);
+          setTimeout(() => {
+            window.location.href = "${APP_URL}?login_token=${jwtToken}&nome=${encodeURIComponent(professor.nome)}&email=${encodeURIComponent(professor.email)}&escola=${encodeURIComponent(professor.escola||"")}&disciplina=${encodeURIComponent(professor.disciplina||"")}";
+          }, 2000);
         </script>
       </body>
       </html>
