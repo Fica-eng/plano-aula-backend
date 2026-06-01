@@ -1,15 +1,16 @@
-const express    = require("express");
-const cors       = require("cors");
-const bcrypt     = require("bcryptjs");
-const jwt        = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
-const crypto     = require("crypto");
-const { Pool }   = require("pg");
+const express  = require("express");
+const cors     = require("cors");
+const bcrypt   = require("bcryptjs");
+const jwt      = require("jsonwebtoken");
+const crypto   = require("crypto");
+const { Pool } = require("pg");
 
 const app        = express();
 const PORT       = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "plano_aula_moz_2026_secreto";
 const APP_URL    = process.env.APP_URL    || "https://fica-eng.github.io/gerador-de-planos-de-aulas";
+const BREVO_KEY  = process.env.BREVO_API_KEY;
+const EMAIL_FROM = "noreply.fedtech@gmail.com";
 
 // ── Base de dados ──────────────────────────────────────────────────────────
 const db = new Pool({
@@ -51,73 +52,50 @@ async function iniciarDB() {
 }
 iniciarDB();
 
-// ── Email — tentar múltiplas configurações SMTP ────────────────────────────
-const smtpConfigs = [
-  { host: "smtp.gmail.com", port: 587, secure: false },
-  { host: "smtp.gmail.com", port: 465, secure: true  },
-  { host: "smtp.gmail.com", port: 25,  secure: false },
-];
 
 async function enviarEmailVerificacao(nome, email, token) {
   const link = `${APP_URL}?verificar=${token}`;
-  const html = `
-    <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:12px">
-      <div style="text-align:center;margin-bottom:24px">
-        <h1 style="color:#1a56db;font-size:22px;margin:0">📋 Gerador de Plano de Aula</h1>
-        <p style="color:#666;font-size:13px;margin-top:6px">Plataforma para professores moçambicanos</p>
-      </div>
-      <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid #e5e7eb">
-        <p style="font-size:15px;color:#333">Olá, <b>${nome}</b>!</p>
-        <p style="font-size:14px;color:#555;margin-top:8px">
-          Obrigado por se registar. Clique no botão abaixo para confirmar o seu email e activar a sua conta.
-        </p>
-        <div style="text-align:center;margin:28px 0">
-          <a href="${link}" style="background:#1a56db;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold">
-            ✅ Confirmar Email
-          </a>
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": BREVO_KEY,
+    },
+    body: JSON.stringify({
+      sender: { name: "Gerador de Plano de Aula", email: EMAIL_FROM },
+      to: [{ email }],
+      subject: "✅ Confirme o seu email — Gerador de Plano de Aula",
+      htmlContent: `
+        <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:12px">
+          <div style="text-align:center;margin-bottom:24px">
+            <h1 style="color:#1a56db;font-size:22px;margin:0">📋 Gerador de Plano de Aula</h1>
+            <p style="color:#666;font-size:13px;margin-top:6px">Plataforma para professores moçambicanos</p>
+          </div>
+          <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid #e5e7eb">
+            <p style="font-size:15px;color:#333">Olá, <b>${nome}</b>!</p>
+            <p style="font-size:14px;color:#555;margin-top:8px">
+              Obrigado por se registar. Clique no botão abaixo para confirmar o seu email e activar a sua conta.
+            </p>
+            <div style="text-align:center;margin:28px 0">
+              <a href="${link}" style="background:#1a56db;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold">
+                ✅ Confirmar Email
+              </a>
+            </div>
+            <p style="font-size:12px;color:#888;text-align:center">
+              Se não se registou, ignore este email.<br/>
+              O link expira em <b>24 horas</b>.
+            </p>
+          </div>
+          <p style="font-size:11px;color:#aaa;text-align:center;margin-top:16px">
+            © 2026 Gerador de Plano de Aula — Moçambique
+          </p>
         </div>
-        <p style="font-size:12px;color:#888;text-align:center">
-          Se não se registou, ignore este email.<br/>
-          O link expira em <b>24 horas</b>.
-        </p>
-      </div>
-      <p style="font-size:11px;color:#aaa;text-align:center;margin-top:16px">
-        © 2026 Gerador de Plano de Aula — Moçambique
-      </p>
-    </div>`;
-
-  let ultimoErro = null;
-  for (const cfg of smtpConfigs) {
-    try {
-      console.log(`🔄 Tentando SMTP ${cfg.host}:${cfg.port}...`);
-      const transporter = nodemailer.createTransport({
-        host: cfg.host,
-        port: cfg.port,
-        secure: cfg.secure,
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS,
-        },
-        tls: { rejectUnauthorized: false },
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 10000,
-      });
-      await transporter.verify();
-      await transporter.sendMail({
-        from: `"Gerador de Plano de Aula" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: "✅ Confirme o seu email — Gerador de Plano de Aula",
-        html,
-      });
-      console.log(`✅ Email enviado via ${cfg.host}:${cfg.port}`);
-      return;
-    } catch (err) {
-      console.error(`❌ Falhou ${cfg.host}:${cfg.port} — ${err.message}`);
-      ultimoErro = err;
-    }
-  }
-  throw ultimoErro;
+      `,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(JSON.stringify(data));
+  console.log(`✅ Email enviado para ${email}`);
 }
 
 // ── Middleware ─────────────────────────────────────────────────────────────
