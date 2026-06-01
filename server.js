@@ -54,6 +54,7 @@ iniciarDB();
 
 
 async function enviarEmailVerificacao(nome, email, token) {
+  // Link aponta para o GitHub Pages — não para o Railway
   const link = `${APP_URL}?verificar=${token}`;
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
@@ -142,9 +143,8 @@ app.post("/registar", async (req, res) => {
     // Responder imediatamente
     res.json({ mensagem: "Registo feito com sucesso! Verifique o seu email para activar a conta." });
 
-    // Enviar email em background
+    // Enviar email em background — apenas uma vez
     enviarEmailVerificacao(nome, email, token)
-      .then(() => console.log(`✅ Email enviado para ${email}`))
       .catch(err => console.error(`❌ Erro email:`, err.message));
 
   } catch (err) {
@@ -152,7 +152,7 @@ app.post("/registar", async (req, res) => {
   }
 });
 
-// ── VERIFICAR EMAIL ────────────────────────────────────────────────────────
+// ── VERIFICAR EMAIL (chamado pelo frontend) ────────────────────────────────
 app.get("/verificar/:token", async (req, res) => {
   const { token } = req.params;
   try {
@@ -160,14 +160,8 @@ app.get("/verificar/:token", async (req, res) => {
       "SELECT id, nome, email, escola, disciplina FROM professores WHERE token_verificacao = $1",
       [token]
     );
-    if (result.rows.length === 0) {
-      return res.send(`
-        <html><body style="font-family:Arial;text-align:center;padding:50px">
-          <h2 style="color:#b91c1c">❌ Link inválido ou já utilizado.</h2>
-          <a href="${APP_URL}" style="color:#1a56db">Voltar ao site</a>
-        </body></html>
-      `);
-    }
+    if (result.rows.length === 0)
+      return res.status(400).json({ erro: "Link inválido ou já utilizado." });
 
     const professor = result.rows[0];
     await db.query(
@@ -175,45 +169,26 @@ app.get("/verificar/:token", async (req, res) => {
       [professor.id]
     );
 
+    const confirmacao = await db.query("SELECT verificado FROM professores WHERE id = $1", [professor.id]);
+    console.log(`✅ Professor ${professor.email} verificado:`, confirmacao.rows[0].verificado);
+
     const jwtToken = jwt.sign(
       { id: professor.id, nome: professor.nome, email: professor.email },
       JWT_SECRET, { expiresIn: "7d" }
     );
 
-    // Página HTML que redireciona com token no URL
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8"/>
-        <title>Email confirmado!</title>
-        <style>
-          body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:linear-gradient(135deg,#0e3a8c,#1a56db)}
-          .card{background:#fff;border-radius:14px;padding:40px 32px;text-align:center;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,.18)}
-          h2{color:#1a56db;margin:12px 0 8px}
-          p{color:#555;font-size:14px}
-          .loader{border:4px solid #e5e7eb;border-top:4px solid #1a56db;border-radius:50%;width:36px;height:36px;animation:spin 1s linear infinite;margin:20px auto}
-          @keyframes spin{to{transform:rotate(360deg)}}
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <div style="font-size:48px">✅</div>
-          <h2>Email confirmado!</h2>
-          <p>Olá, <b>${professor.nome}</b>!<br/>A sua conta foi activada com sucesso.</p>
-          <div class="loader"></div>
-          <p style="font-size:12px;color:#888">A entrar automaticamente...</p>
-        </div>
-        <script>
-          setTimeout(() => {
-            window.location.href = "${APP_URL}?login_token=${jwtToken}&nome=${encodeURIComponent(professor.nome)}&email=${encodeURIComponent(professor.email)}&escola=${encodeURIComponent(professor.escola||"")}&disciplina=${encodeURIComponent(professor.disciplina||"")}";
-          }, 2000);
-        </script>
-      </body>
-      </html>
-    `);
+    res.json({
+      sucesso: true,
+      token: jwtToken,
+      professor: {
+        nome: professor.nome,
+        email: professor.email,
+        escola: professor.escola || "",
+        disciplina: professor.disciplina || ""
+      }
+    });
   } catch (err) {
-    res.status(500).send(`<html><body>Erro: ${err.message}</body></html>`);
+    res.status(500).json({ erro: err.message });
   }
 });
 
@@ -266,8 +241,8 @@ app.post("/reenviar-verificacao", async (req, res) => {
 
     res.json({ mensagem: "Email de verificação reenviado com sucesso." });
 
+    // Enviar em background — apenas uma vez
     enviarEmailVerificacao(professor.nome, professor.email, token)
-      .then(() => console.log(`✅ Email reenviado para ${email}`))
       .catch(err => console.error(`❌ Erro reenvio:`, err.message));
 
   } catch (err) {
