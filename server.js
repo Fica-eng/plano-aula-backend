@@ -313,8 +313,84 @@ app.get("/meus-planos", autenticar, async (req, res) => {
   }
 });
 
-// ── ESTADO ─────────────────────────────────────────────────────────────────
-app.get("/", (req, res) => {
+// ── MIDDLEWARE ADMIN ───────────────────────────────────────────────────────
+function autenticarAdmin(req, res, next) {
+  const secret = req.headers["x-admin-secret"];
+  if (!secret || secret !== process.env.ADMIN_SECRET)
+    return res.status(401).json({ erro: "Acesso negado." });
+  next();
+}
+
+// ── ADMIN: Estatísticas gerais ─────────────────────────────────────────────
+app.get("/admin/stats", autenticarAdmin, async (req, res) => {
+  try {
+    const [totalProfs, verificados, naoVerificados, totalPlanos, recentes] = await Promise.all([
+      db.query("SELECT COUNT(*) FROM professores"),
+      db.query("SELECT COUNT(*) FROM professores WHERE verificado = TRUE"),
+      db.query("SELECT COUNT(*) FROM professores WHERE verificado = FALSE"),
+      db.query("SELECT COUNT(*) FROM planos"),
+      db.query("SELECT COUNT(*) FROM professores WHERE criado_em >= NOW() - INTERVAL '7 days'"),
+    ]);
+    res.json({
+      totalProfessores:  parseInt(totalProfs.rows[0].count),
+      verificados:       parseInt(verificados.rows[0].count),
+      naoVerificados:    parseInt(naoVerificados.rows[0].count),
+      totalPlanos:       parseInt(totalPlanos.rows[0].count),
+      novosUltimos7dias: parseInt(recentes.rows[0].count),
+    });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// ── ADMIN: Listar professores ──────────────────────────────────────────────
+app.get("/admin/professores", autenticarAdmin, async (req, res) => {
+  try {
+    const { search, page = 1, limit = 20 } = req.query;
+    const offset = (page - 1) * limit;
+    let query = `SELECT p.id, p.nome, p.email, p.escola, p.disciplina, p.verificado, p.criado_em,
+                 COUNT(pl.id) as total_planos
+                 FROM professores p
+                 LEFT JOIN planos pl ON pl.professor_id = p.id`;
+    const params = [];
+    if (search) {
+      params.push(`%${search}%`);
+      query += ` WHERE p.nome ILIKE $1 OR p.email ILIKE $1 OR p.escola ILIKE $1`;
+    }
+    query += ` GROUP BY p.id ORDER BY p.criado_em DESC LIMIT ${limit} OFFSET ${offset}`;
+    const result = await db.query(query, params);
+    const total  = await db.query(`SELECT COUNT(*) FROM professores${search ? ` WHERE nome ILIKE $1 OR email ILIKE $1 OR escola ILIKE $1` : ""}`, search ? [`%${search}%`] : []);
+    res.json({ professores: result.rows, total: parseInt(total.rows[0].count), page: parseInt(page), limit: parseInt(limit) });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// ── ADMIN: Apagar professor ────────────────────────────────────────────────
+app.delete("/admin/professores/:id", autenticarAdmin, async (req, res) => {
+  try {
+    await db.query("DELETE FROM professores WHERE id = $1", [req.params.id]);
+    res.json({ sucesso: true });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// ── ADMIN: Verificar professor manualmente ─────────────────────────────────
+app.patch("/admin/professores/:id/verificar", autenticarAdmin, async (req, res) => {
+  try {
+    await db.query("UPDATE professores SET verificado = TRUE, token_verificacao = NULL WHERE id = $1", [req.params.id]);
+    res.json({ sucesso: true });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// ── ADMIN: Planos recentes ─────────────────────────────────────────────────
+app.get("/admin/planos", autenticarAdmin, async (req, res) => {
+  try {
+    const result = await db.query(`
+      SELECT pl.id, pl.tema, pl.disciplina, pl.classe, pl.criado_em,
+             p.nome as professor, p.email, p.escola
+      FROM planos pl
+      JOIN professores p ON p.id = pl.professor_id
+      ORDER BY pl.criado_em DESC LIMIT 50
+    `);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
   res.json({ status: "ok", mensagem: "Servidor do Gerador de Plano de Aula activo." });
 });
 
