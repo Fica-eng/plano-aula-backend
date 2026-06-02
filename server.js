@@ -52,16 +52,12 @@ async function iniciarDB() {
 }
 iniciarDB();
 
-
+// ── Email via Brevo ────────────────────────────────────────────────────────
 async function enviarEmailVerificacao(nome, email, token) {
-  // Link aponta para o GitHub Pages — não para o Railway
   const link = `${APP_URL}?verificar=${token}`;
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "api-key": BREVO_KEY,
-    },
+    headers: { "Content-Type": "application/json", "api-key": BREVO_KEY },
     body: JSON.stringify({
       sender: { name: "Gerador de Plano de Aula", email: EMAIL_FROM },
       to: [{ email }],
@@ -83,15 +79,13 @@ async function enviarEmailVerificacao(nome, email, token) {
               </a>
             </div>
             <p style="font-size:12px;color:#888;text-align:center">
-              Se não se registou, ignore este email.<br/>
-              O link expira em <b>24 horas</b>.
+              Se não se registou, ignore este email.<br/>O link expira em <b>24 horas</b>.
             </p>
           </div>
           <p style="font-size:11px;color:#aaa;text-align:center;margin-top:16px">
             © 2026 Gerador de Plano de Aula — Moçambique
           </p>
-        </div>
-      `,
+        </div>`,
     }),
   });
   const data = await response.json();
@@ -121,6 +115,13 @@ function autenticar(req, res, next) {
   }
 }
 
+function autenticarAdmin(req, res, next) {
+  const secret = req.headers["x-admin-secret"];
+  if (!secret || secret !== process.env.ADMIN_SECRET)
+    return res.status(401).json({ erro: "Acesso negado." });
+  next();
+}
+
 // ── REGISTO ────────────────────────────────────────────────────────────────
 app.post("/registar", async (req, res) => {
   const { nome, email, senha, escola, disciplina } = req.body;
@@ -130,29 +131,22 @@ app.post("/registar", async (req, res) => {
     const existe = await db.query("SELECT id FROM professores WHERE email = $1", [email]);
     if (existe.rows.length > 0)
       return res.status(400).json({ erro: "Este email já está registado." });
-
     const hash  = await bcrypt.hash(senha, 10);
     const token = crypto.randomBytes(32).toString("hex");
-
     await db.query(
       `INSERT INTO professores (nome, email, senha, escola, disciplina, verificado, token_verificacao)
        VALUES ($1,$2,$3,$4,$5,FALSE,$6)`,
       [nome, email, hash, escola||"", disciplina||"", token]
     );
-
-    // Responder imediatamente
     res.json({ mensagem: "Registo feito com sucesso! Verifique o seu email para activar a conta." });
-
-    // Enviar email em background — apenas uma vez
     enviarEmailVerificacao(nome, email, token)
-      .catch(err => console.error(`❌ Erro email:`, err.message));
-
+      .catch(err => console.error("❌ Erro email:", err.message));
   } catch (err) {
     res.status(500).json({ erro: "Erro ao registar: " + err.message });
   }
 });
 
-// ── VERIFICAR EMAIL (chamado pelo frontend) ────────────────────────────────
+// ── VERIFICAR EMAIL ────────────────────────────────────────────────────────
 app.get("/verificar/:token", async (req, res) => {
   const { token } = req.params;
   try {
@@ -162,21 +156,17 @@ app.get("/verificar/:token", async (req, res) => {
     );
     if (result.rows.length === 0)
       return res.status(400).json({ erro: "Link inválido ou já utilizado." });
-
     const professor = result.rows[0];
     await db.query(
       "UPDATE professores SET verificado = TRUE, token_verificacao = NULL WHERE id = $1",
       [professor.id]
     );
-
     const confirmacao = await db.query("SELECT verificado FROM professores WHERE id = $1", [professor.id]);
     console.log(`✅ Professor ${professor.email} verificado:`, confirmacao.rows[0].verificado);
-
     const jwtToken = jwt.sign(
       { id: professor.id, nome: professor.nome, email: professor.email },
       JWT_SECRET, { expiresIn: "7d" }
     );
-
     res.json({
       sucesso: true,
       token: jwtToken,
@@ -201,16 +191,12 @@ app.post("/login", async (req, res) => {
     const result = await db.query("SELECT * FROM professores WHERE email = $1", [email]);
     if (result.rows.length === 0)
       return res.status(401).json({ erro: "Email ou senha incorrectos." });
-
     const professor = result.rows[0];
-
     if (!professor.verificado)
       return res.status(401).json({ erro: "Por favor confirme o seu email antes de fazer login.", naoVerificado: true });
-
     const ok = await bcrypt.compare(senha, professor.senha);
     if (!ok)
       return res.status(401).json({ erro: "Email ou senha incorrectos." });
-
     const token = jwt.sign(
       { id: professor.id, nome: professor.nome, email: professor.email },
       JWT_SECRET, { expiresIn: "7d" }
@@ -231,20 +217,14 @@ app.post("/reenviar-verificacao", async (req, res) => {
     const result = await db.query("SELECT * FROM professores WHERE email = $1", [email]);
     if (result.rows.length === 0)
       return res.status(404).json({ erro: "Email não encontrado." });
-
     const professor = result.rows[0];
     if (professor.verificado)
       return res.status(400).json({ erro: "Este email já foi verificado." });
-
     const token = crypto.randomBytes(32).toString("hex");
     await db.query("UPDATE professores SET token_verificacao = $1 WHERE id = $2", [token, professor.id]);
-
     res.json({ mensagem: "Email de verificação reenviado com sucesso." });
-
-    // Enviar em background — apenas uma vez
     enviarEmailVerificacao(professor.nome, professor.email, token)
-      .catch(err => console.error(`❌ Erro reenvio:`, err.message));
-
+      .catch(err => console.error("❌ Erro reenvio:", err.message));
   } catch (err) {
     res.status(500).json({ erro: err.message });
   }
@@ -313,15 +293,7 @@ app.get("/meus-planos", autenticar, async (req, res) => {
   }
 });
 
-// ── MIDDLEWARE ADMIN ───────────────────────────────────────────────────────
-function autenticarAdmin(req, res, next) {
-  const secret = req.headers["x-admin-secret"];
-  if (!secret || secret !== process.env.ADMIN_SECRET)
-    return res.status(401).json({ erro: "Acesso negado." });
-  next();
-}
-
-// ── ADMIN: Estatísticas gerais ─────────────────────────────────────────────
+// ── ADMIN: Estatísticas ────────────────────────────────────────────────────
 app.get("/admin/stats", autenticarAdmin, async (req, res) => {
   try {
     const [totalProfs, verificados, naoVerificados, totalPlanos, recentes] = await Promise.all([
@@ -338,28 +310,35 @@ app.get("/admin/stats", autenticarAdmin, async (req, res) => {
       totalPlanos:       parseInt(totalPlanos.rows[0].count),
       novosUltimos7dias: parseInt(recentes.rows[0].count),
     });
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
 });
 
 // ── ADMIN: Listar professores ──────────────────────────────────────────────
 app.get("/admin/professores", autenticarAdmin, async (req, res) => {
   try {
-    const { search, page = 1, limit = 20 } = req.query;
+    const page   = parseInt(req.query.page)  || 1;
+    const limit  = parseInt(req.query.limit) || 15;
+    const search = req.query.search || "";
     const offset = (page - 1) * limit;
-    let query = `SELECT p.id, p.nome, p.email, p.escola, p.disciplina, p.verificado, p.criado_em,
-                 COUNT(pl.id) as total_planos
-                 FROM professores p
-                 LEFT JOIN planos pl ON pl.professor_id = p.id`;
+    let query  = `SELECT p.id, p.nome, p.email, p.escola, p.disciplina, p.verificado, p.criado_em, COUNT(pl.id) as total_planos FROM professores p LEFT JOIN planos pl ON pl.professor_id = p.id`;
+    let qCount = `SELECT COUNT(*) FROM professores`;
     const params = [];
     if (search) {
       params.push(`%${search}%`);
-      query += ` WHERE p.nome ILIKE $1 OR p.email ILIKE $1 OR p.escola ILIKE $1`;
+      query  += ` WHERE p.nome ILIKE $1 OR p.email ILIKE $1 OR p.escola ILIKE $1`;
+      qCount += ` WHERE nome ILIKE $1 OR email ILIKE $1 OR escola ILIKE $1`;
     }
     query += ` GROUP BY p.id ORDER BY p.criado_em DESC LIMIT ${limit} OFFSET ${offset}`;
-    const result = await db.query(query, params);
-    const total  = await db.query(`SELECT COUNT(*) FROM professores${search ? ` WHERE nome ILIKE $1 OR email ILIKE $1 OR escola ILIKE $1` : ""}`, search ? [`%${search}%`] : []);
-    res.json({ professores: result.rows, total: parseInt(total.rows[0].count), page: parseInt(page), limit: parseInt(limit) });
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+    const [result, total] = await Promise.all([
+      db.query(query, params),
+      db.query(qCount, params),
+    ]);
+    res.json({ professores: result.rows, total: parseInt(total.rows[0].count), page, limit });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
 });
 
 // ── ADMIN: Apagar professor ────────────────────────────────────────────────
@@ -367,7 +346,9 @@ app.delete("/admin/professores/:id", autenticarAdmin, async (req, res) => {
   try {
     await db.query("DELETE FROM professores WHERE id = $1", [req.params.id]);
     res.json({ sucesso: true });
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
 });
 
 // ── ADMIN: Verificar professor manualmente ─────────────────────────────────
@@ -375,7 +356,9 @@ app.patch("/admin/professores/:id/verificar", autenticarAdmin, async (req, res) 
   try {
     await db.query("UPDATE professores SET verificado = TRUE, token_verificacao = NULL WHERE id = $1", [req.params.id]);
     res.json({ sucesso: true });
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
 });
 
 // ── ADMIN: Planos recentes ─────────────────────────────────────────────────
@@ -389,8 +372,13 @@ app.get("/admin/planos", autenticarAdmin, async (req, res) => {
       ORDER BY pl.criado_em DESC LIMIT 50
     `);
     res.json(result.rows);
-  } catch (err) { res.status(500).json({ erro: err.message }); }
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
 });
+
+// ── ESTADO ─────────────────────────────────────────────────────────────────
+app.get("/", (req, res) => {
   res.json({ status: "ok", mensagem: "Servidor do Gerador de Plano de Aula activo." });
 });
 
