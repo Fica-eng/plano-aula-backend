@@ -44,6 +44,7 @@ async function iniciarDB() {
     `);
     await db.query(`ALTER TABLE professores ADD COLUMN IF NOT EXISTS verificado BOOLEAN DEFAULT FALSE`);
     await db.query(`ALTER TABLE professores ADD COLUMN IF NOT EXISTS token_verificacao TEXT`);
+    await db.query(`ALTER TABLE professores ADD COLUMN IF NOT EXISTS genero TEXT DEFAULT ''`);
     await db.query(`UPDATE professores SET verificado = TRUE WHERE verificado IS NULL OR verificado = FALSE`);
     console.log("✅ Base de dados pronta.");
   } catch (err) {
@@ -124,7 +125,7 @@ function autenticarAdmin(req, res, next) {
 
 // ── REGISTO ────────────────────────────────────────────────────────────────
 app.post("/registar", async (req, res) => {
-  const { nome, email, senha, escola, disciplina } = req.body;
+  const { nome, email, senha, escola, disciplina, genero } = req.body;
   if (!nome || !email || !senha)
     return res.status(400).json({ erro: "Nome, email e senha são obrigatórios." });
   try {
@@ -134,9 +135,9 @@ app.post("/registar", async (req, res) => {
     const hash  = await bcrypt.hash(senha, 10);
     const token = crypto.randomBytes(32).toString("hex");
     await db.query(
-      `INSERT INTO professores (nome, email, senha, escola, disciplina, verificado, token_verificacao)
-       VALUES ($1,$2,$3,$4,$5,FALSE,$6)`,
-      [nome, email, hash, escola||"", disciplina||"", token]
+      `INSERT INTO professores (nome, email, senha, escola, disciplina, genero, verificado, token_verificacao)
+       VALUES ($1,$2,$3,$4,$5,$6,FALSE,$7)`,
+      [nome, email, hash, escola||"", disciplina||"", genero||"", token]
     );
     res.json({ mensagem: "Registo feito com sucesso! Verifique o seu email para activar a conta." });
     enviarEmailVerificacao(nome, email, token)
@@ -296,12 +297,14 @@ app.get("/meus-planos", autenticar, async (req, res) => {
 // ── ADMIN: Estatísticas ────────────────────────────────────────────────────
 app.get("/admin/stats", autenticarAdmin, async (req, res) => {
   try {
-    const [totalProfs, verificados, naoVerificados, totalPlanos, recentes] = await Promise.all([
+    const [totalProfs, verificados, naoVerificados, totalPlanos, recentes, masculinos, femininos] = await Promise.all([
       db.query("SELECT COUNT(*) FROM professores"),
       db.query("SELECT COUNT(*) FROM professores WHERE verificado = TRUE"),
       db.query("SELECT COUNT(*) FROM professores WHERE verificado = FALSE"),
       db.query("SELECT COUNT(*) FROM planos"),
       db.query("SELECT COUNT(*) FROM professores WHERE criado_em >= NOW() - INTERVAL '7 days'"),
+      db.query("SELECT COUNT(*) FROM professores WHERE genero = 'M'"),
+      db.query("SELECT COUNT(*) FROM professores WHERE genero = 'F'"),
     ]);
     res.json({
       totalProfessores:  parseInt(totalProfs.rows[0].count),
@@ -309,6 +312,8 @@ app.get("/admin/stats", autenticarAdmin, async (req, res) => {
       naoVerificados:    parseInt(naoVerificados.rows[0].count),
       totalPlanos:       parseInt(totalPlanos.rows[0].count),
       novosUltimos7dias: parseInt(recentes.rows[0].count),
+      masculinos:        parseInt(masculinos.rows[0].count),
+      femininos:         parseInt(femininos.rows[0].count),
     });
   } catch (err) {
     res.status(500).json({ erro: err.message });
@@ -322,7 +327,7 @@ app.get("/admin/professores", autenticarAdmin, async (req, res) => {
     const limit  = parseInt(req.query.limit) || 15;
     const search = req.query.search || "";
     const offset = (page - 1) * limit;
-    let query  = `SELECT p.id, p.nome, p.email, p.escola, p.disciplina, p.verificado, p.criado_em, COUNT(pl.id) as total_planos FROM professores p LEFT JOIN planos pl ON pl.professor_id = p.id`;
+    let query  = `SELECT p.id, p.nome, p.email, p.escola, p.disciplina, p.genero, p.verificado, p.criado_em, COUNT(pl.id) as total_planos FROM professores p LEFT JOIN planos pl ON pl.professor_id = p.id`;
     let qCount = `SELECT COUNT(*) FROM professores`;
     const params = [];
     if (search) {
