@@ -231,7 +231,89 @@ app.post("/reenviar-verificacao", async (req, res) => {
   }
 });
 
-// ── PERFIL ─────────────────────────────────────────────────────────────────
+// ── RECUPERAR SENHA ────────────────────────────────────────────────────────
+app.post("/recuperar-senha", async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ erro: "Email obrigatório." });
+  try {
+    const result = await db.query("SELECT * FROM professores WHERE email = $1", [email]);
+    if (result.rows.length === 0)
+      return res.status(404).json({ erro: "Email não encontrado." });
+
+    const professor = result.rows[0];
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiry = new Date(Date.now() + 3600000); // 1 hora
+
+    await db.query(
+      "UPDATE professores SET token_verificacao = $1 WHERE id = $2",
+      [token, professor.id]
+    );
+
+    const link = `${APP_URL}?redefinir=${token}`;
+    res.json({ mensagem: "Email de recuperação enviado com sucesso." });
+
+    // Enviar email em background
+    fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "api-key": BREVO_KEY },
+      body: JSON.stringify({
+        sender: { name: "Gerador de Plano de Aula", email: EMAIL_FROM },
+        to: [{ email }],
+        subject: "🔑 Recuperação de senha — Gerador de Plano de Aula",
+        htmlContent: `
+          <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:12px">
+            <div style="text-align:center;margin-bottom:24px">
+              <h1 style="color:#1a56db;font-size:22px;margin:0">📋 Gerador de Plano de Aula</h1>
+            </div>
+            <div style="background:#fff;border-radius:10px;padding:24px;border:1px solid #e5e7eb">
+              <p style="font-size:15px;color:#333">Olá, <b>${professor.nome}</b>!</p>
+              <p style="font-size:14px;color:#555;margin-top:8px">
+                Recebemos um pedido para redefinir a sua senha. Clique no botão abaixo para criar uma nova senha.
+              </p>
+              <div style="text-align:center;margin:28px 0">
+                <a href="${link}" style="background:#1a56db;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:bold">
+                  🔑 Redefinir Senha
+                </a>
+              </div>
+              <p style="font-size:12px;color:#888;text-align:center">
+                Se não pediu a recuperação, ignore este email.<br/>
+                O link expira em <b>1 hora</b>.
+              </p>
+            </div>
+          </div>`,
+      }),
+    }).catch(err => console.error("❌ Erro email recuperação:", err.message));
+
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// ── REDEFINIR SENHA ────────────────────────────────────────────────────────
+app.post("/redefinir-senha", async (req, res) => {
+  const { token, novaSenha } = req.body;
+  if (!token || !novaSenha)
+    return res.status(400).json({ erro: "Token e nova senha são obrigatórios." });
+  if (novaSenha.length < 6)
+    return res.status(400).json({ erro: "A senha deve ter pelo menos 6 caracteres." });
+  try {
+    const result = await db.query(
+      "SELECT * FROM professores WHERE token_verificacao = $1",
+      [token]
+    );
+    if (result.rows.length === 0)
+      return res.status(400).json({ erro: "Link inválido ou expirado." });
+
+    const hash = await bcrypt.hash(novaSenha, 10);
+    await db.query(
+      "UPDATE professores SET senha = $1, token_verificacao = NULL, verificado = TRUE WHERE id = $2",
+      [hash, result.rows[0].id]
+    );
+    res.json({ sucesso: true, mensagem: "Senha redefinida com sucesso! Pode fazer login." });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
 app.get("/perfil", autenticar, async (req, res) => {
   try {
     const result = await db.query(
