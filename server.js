@@ -376,7 +376,28 @@ app.get("/meus-planos", autenticar, async (req, res) => {
   }
 });
 
-// ── ADMIN: Estatísticas ────────────────────────────────────────────────────
+// ── ADMIN: Crescimento por mês ─────────────────────────────────────────────
+app.get("/admin/crescimento", autenticarAdmin, async (req, res) => {
+  try {
+    const [professores, planos] = await Promise.all([
+      db.query(`
+        SELECT TO_CHAR(criado_em, 'YYYY-MM') as mes, COUNT(*) as total
+        FROM professores
+        WHERE criado_em >= NOW() - INTERVAL '12 months'
+        GROUP BY mes ORDER BY mes ASC
+      `),
+      db.query(`
+        SELECT TO_CHAR(criado_em, 'YYYY-MM') as mes, COUNT(*) as total
+        FROM planos
+        WHERE criado_em >= NOW() - INTERVAL '12 months'
+        GROUP BY mes ORDER BY mes ASC
+      `),
+    ]);
+    res.json({ professores: professores.rows, planos: planos.rows });
+  } catch (err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
 app.get("/admin/stats", autenticarAdmin, async (req, res) => {
   try {
     const [totalProfs, verificados, naoVerificados, totalPlanos, recentes, masculinos, femininos] = await Promise.all([
